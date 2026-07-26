@@ -28,6 +28,20 @@ Unless user tells you exactly what to write:
 - **Never comment on GitHub** (issues, PRs, discussions).
 - **Never create issues on GitHub**.
 
+## Downstream Repository
+
+This repository is a public downstream fork of public OMP. Public OMP is an integration source, not a contribution destination.
+AI agents perform repository work; human-facing GitHub files are supplemental. Agents MUST follow downstream rules here and in `docs/dev/**`; GitHub files MUST NOT be the sole source of agent instructions.
+
+- Never push, publish, release, create issues or pull requests, create contribution branches, or comment on `https://github.com/can1357/oh-my-pi` or any remote resolving to public OMP.
+- Before any push, verify the destination. `origin` is the public fork push destination; `upstream` is fetch-only.
+- Never push private or confidential content to this public fork.
+- Do not run release or publication commands unless the user explicitly requests one and every destination has been verified.
+- Downstream governance instructions and documentation may exist only in root `AGENTS.md` and `docs/dev/**`.
+- Private source changes may be made wherever required. Minimise unnecessary divergence, preserve compatible upstream improvements, and record durable merge-sensitive divergence in `docs/dev/divergence.md`.
+
+Do not create `.omp/AGENTS.md` or a custom merge driver.
+
 ## Code Quality
 
 - No `any` unless absolutely necessary.
@@ -265,3 +279,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 2. Run `bun run release`.
 
 The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+
+## Gotchas
+
+- Do not add a pointer from `AGENTS.md` to `.omp/RULES.md` solely to keep downstream governance visible. OMP already loads project context into the system prompt on every model request, so this infrequent git workflow does not need sticky placement. `.omp/RULES.md` remains valid for independent hard invariants; keep downstream governance in this `AGENTS.md` without duplicating it there.
