@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/live` corrupting the heap when opening PulseAudio on Linux ARM64 by shipping target-specific miniaudio Rust layouts for GNU and musl native addons ([#7138](https://github.com/can1357/oh-my-pi/pull/7138) by [@olegpulatov](https://github.com/olegpulatov)).
+
+## [17.2.1] - 2026-07-30
+
+### Fixed
+
+- Fixed the `computer` tool advertising Wayland support that never worked: on the default rootless XWayland (GNOME/KDE/sway) the X11 root window has no readable pixmap, so root `GetImage` failed on every screenshot with a raw `BadMatch` protocol dump. `Monitor::all` now probes root drawability at initialization and fails fast with an actionable `DESKTOP_BACKEND_UNAVAILABLE` message naming the rootless-XWayland constraint, and `docs/computer-use.md` now lists rootless XWayland as unsupported ([#7085](https://github.com/can1357/oh-my-pi/issues/7085)).
+
+## [17.2.0] - 2026-07-30
+
+### Changed
+
+- Split the native voice engine (miniaudio capture/playback, WebRTC peer, Opus media) out of the `pi-natives` addon crate into a napi-free `pi-voice` rlib. The addon keeps thin `#[napi]` adapters, so the JS API is unchanged; the webrtc/opus/miniaudio dependency graph now compiles once into the library and no longer rebuilds with the addon leaf (which recompiles every release via its version-sentinel edit).
+- Release binaries now build in parallel with the test fan-out; npm leaf publishing moved to a dedicated post-validation job (`release_native_leaves`), and darwin release bazel caches are pre-warmed on native-affecting main pushes — cutting release wall time from the previous serialized tests → cold darwin build pipeline.
+
+## [17.1.8] - 2026-07-28
+
+### Fixed
+
+- Fixed an issue on macOS (darwin) where the native addon delivered zero AudioCapture callbacks, which prevented microphone audio from being captured.
+
+## [17.1.6] - 2026-07-27
+
+### Changed
+
+- CI now exports Bazel disk caches only after exact misses and reuses one native addon artifact across Linux test and release jobs. macOS release jobs now build only their own architecture.
+- Native addons now build with Bazel (rules_rust + hermetic zig cc toolchains for linux-gnu/musl, host Xcode for darwin, and a hermetic clang-cl + xwin toolchain for windows-msvc) instead of the napi CLI + cargo-zigbuild/cargo-xwin pipeline. `bun run build` drives `scripts/bazel-natives.ts`; TypeScript binding regeneration moved to `bun run build:bindings` (needed only when the Rust API surface changes). CI caches through a content-addressed bazel-remote action cache instead of sccache + target-directory snapshots, cutting warm native rebuilds from ~20 minutes to seconds and cold cache-hit builds to ~2.5 minutes.
+
+### Fixed
+
+- napi binding build failures now surface the exit code and the tail of stdout/stderr instead of a bare "napi build failed" message ([#6799](https://github.com/can1357/oh-my-pi/pull/6799)).
+- Silenced cross-platform Rust build warnings: dead-code on unix-only fields/helpers in `pi-uutils-ctx`, `pi-shell` (fd owner filters, coreutils argv), and vendored `uu-find`/`uu-stat` when compiling for Windows, and deprecated `libc::time_t` casts in `pi-iso` on musl. `pi-walker` now declares the `windows-sys` features it uses (`Win32_Foundation`, `Win32_Security`, `Win32_Storage_FileSystem`, `Win32_System_IO`) instead of relying on workspace-wide feature unification.
+
+## [17.1.5] - 2026-07-27
+
+### Fixed
+
+- Fixed the native `sort` builtin panicking with `SendError(..)` at `chunks.rs:248` when the chunk-channel receiver disconnected early (e.g. a consumer thread stopping after an error or closed output); the reader now stops gracefully instead of unwrapping the failed send, and a panicking external-sort worker thread is surfaced as an error instead of silently emitting truncated output ([#6736](https://github.com/can1357/oh-my-pi/issues/6736)).
+
 ## [17.1.4] - 2026-07-26
 
 ### Added

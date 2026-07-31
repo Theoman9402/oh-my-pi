@@ -417,30 +417,62 @@ export interface SystemPromptToolMetadata {
 	examples?: readonly ToolExample[];
 }
 
+export type SystemPromptToolMetadataProjection =
+	| {
+			mode: "compact";
+			toolNames: readonly string[];
+			overrides?: Partial<Record<string, Partial<SystemPromptToolMetadata>>>;
+	  }
+	| {
+			mode: "full";
+			overrides?: Partial<Record<string, Partial<SystemPromptToolMetadata>>>;
+	  };
+
 export function buildSystemPromptToolMetadata(
 	tools: Map<string, AgentTool>,
 	overrides: Partial<Record<string, Partial<SystemPromptToolMetadata>>> = {},
 ): Map<string, SystemPromptToolMetadata> {
-	return new Map(
-		Array.from(tools.entries(), ([name, tool]) => {
-			const toolRecord = tool as AgentTool & { label?: string; description?: string };
-			const override = overrides[name];
-			const wireName =
-				override?.wireName ??
-				(typeof toolRecord.customWireName === "string" ? toolRecord.customWireName : undefined);
-			return [
-				name,
-				{
-					label: override?.label ?? (typeof toolRecord.label === "string" ? toolRecord.label : ""),
-					description:
-						override?.description ?? (typeof toolRecord.description === "string" ? toolRecord.description : ""),
-					parameters: toolRecord.parameters,
-					examples: toolRecord.examples,
-					wireName,
-				},
-			] as const;
-		}),
-	);
+	return projectSystemPromptToolMetadata(tools, { mode: "full", overrides });
+}
+
+/** Builds a mode-specific metadata snapshot for internal prompt assembly. */
+export function projectSystemPromptToolMetadata(
+	tools: Map<string, AgentTool>,
+	projection: SystemPromptToolMetadataProjection,
+): Map<string, SystemPromptToolMetadata> {
+	const metadata = new Map<string, SystemPromptToolMetadata>();
+	const addTool = (name: string, tool: AgentTool): void => {
+		const override = projection.overrides?.[name];
+		const labelValue = override?.label ?? tool.label;
+		const wireNameValue = override?.wireName ?? tool.customWireName;
+		const label = typeof labelValue === "string" ? labelValue : "";
+		const wireName = typeof wireNameValue === "string" ? wireNameValue : undefined;
+
+		if (projection.mode === "compact") {
+			metadata.set(name, { label, description: "", wireName });
+			return;
+		}
+
+		const descriptionValue = override?.description ?? tool.description;
+		metadata.set(name, {
+			label,
+			description: typeof descriptionValue === "string" ? descriptionValue : "",
+			parameters: tool.parameters,
+			examples: tool.examples,
+			wireName,
+		});
+	};
+
+	if (projection.mode === "compact") {
+		for (const name of projection.toolNames) {
+			const tool = tools.get(name);
+			if (tool) addTool(name, tool);
+		}
+	} else {
+		for (const [name, tool] of tools) addTool(name, tool);
+	}
+
+	return metadata;
 }
 
 export interface BuildSystemPromptOptions {
@@ -496,6 +528,8 @@ export interface BuildSystemPromptOptions {
 	workspaceTree?: WorkspaceTree | Promise<WorkspaceTree>;
 	/** Whether the local memory://root summary is active. */
 	memoryRootEnabled?: boolean;
+	/** Whether the read-only security:// resource namespace is active. */
+	securityEnabled?: boolean;
 	/** Active model identifier (e.g. "anthropic/claude-opus-4") used by prompt policy and optionally surfaced. */
 	model?: string;
 	/** Whether to surface `model` in the workstation block. Model-specific prompt policy still uses it. Default: true. */
@@ -508,8 +542,8 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
-	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
-	xdevTools?: Array<{ name: string; summary: string }>;
+	/** Tools mounted under `xd://`; renders the protocol section when non-empty. `dynamic` marks external devices whose summary is third-party metadata. */
+	xdevTools?: Array<{ name: string; summary: string; dynamic?: boolean }>;
 	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
 	xdevDocs?: string;
 	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
@@ -553,6 +587,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		secretsEnabled = false,
 		workspaceTree: providedWorkspaceTree,
 		memoryRootEnabled = false,
+		securityEnabled = false,
 		model,
 		includeModelInPrompt = true,
 		personality = "default",
@@ -743,6 +778,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		toolNames = tools ? Array.from(tools.keys()) : [...DEFAULT_SYSTEM_PROMPT_TOOL_NAMES];
 	}
 
+	// List mode shows a compact tool-name list; it only applies when descriptors
+	// stay in provider-native tool schemas AND native tool calling is active.
+	// Otherwise render full `# Tool:` sections inline in the system prompt.
+	const toolListMode = !inlineToolDescriptors && nativeTools;
 	// Build tool descriptions for system prompt rendering.
 	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
 	// xd://-mounted tools count as present for prompt gates ({{#has tools "lsp"}})
@@ -761,22 +800,21 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		name: toolPromptNames.get(name) ?? name,
 		internalName: name,
 		label: tools?.get(name)?.label ?? "",
-		description: tools?.get(name)?.description ?? "",
 	}));
-	const inventoryTools = inventoryToolNames.map(name => {
-		const meta = tools?.get(name);
-		return {
-			name: toolPromptNames.get(name) ?? name,
-			description: meta?.description ?? "",
-			parameters: meta?.parameters ?? ({ type: "object" } as TSchema),
-			examples: meta?.examples,
-		};
-	});
-	// List mode shows a compact tool-name list; it only applies when descriptors
-	// stay in provider-native tool schemas AND native tool calling is active.
-	// Otherwise render full `# Tool:` sections inline in the system prompt.
-	const toolListMode = !inlineToolDescriptors && nativeTools;
-	const toolInventory = toolListMode ? "" : renderToolInventory(inventoryTools, model ?? "");
+	const toolInventory = toolListMode
+		? ""
+		: renderToolInventory(
+				inventoryToolNames.map(name => {
+					const meta = tools?.get(name);
+					return {
+						name: toolPromptNames.get(name) ?? name,
+						description: meta?.description ?? "",
+						parameters: meta?.parameters ?? ({ type: "object" } as TSchema),
+						examples: meta?.examples,
+					};
+				}),
+				model ?? "",
+			);
 
 	// Filter skills for the rendered system prompt:
 	// - require the `read` tool so the model can actually fetch skill content;
@@ -831,10 +869,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		taskIrcEnabled,
 		secretsEnabled,
 		hasMemoryRoot: memoryRootEnabled,
+		securityEnabled,
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
 		renderMermaid,
 		xdevTools,
+		hasDynamicXdevTools: xdevTools.some(mounted => mounted.dynamic === true),
 		xdevDocs,
 		autoQaEnabled,
 	};

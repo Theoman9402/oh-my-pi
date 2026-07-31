@@ -67,7 +67,7 @@ const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
 export function sanitizeAssistantForReparentedHistory(message: AssistantMessage): AssistantMessage {
 	const content: AssistantMessage["content"] = [];
 	for (const block of message.content) {
-		if (block.type === "redactedThinking") continue;
+		if (block.type === "redactedThinking" || block.type === "anthropicServerTool") continue;
 		if (block.type === "thinking") {
 			content.push({ type: "thinking", thinking: block.thinking });
 			continue;
@@ -1170,7 +1170,7 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 		}
 		case "assistant": {
 			// A user-interrupted turn keeps its trailing thinking run on the
-			// persisted/displayed message so reload and Ctrl+L rebuilds still
+			// persisted/displayed message so reload and display-reset rebuilds still
 			// show it. That run is incomplete/unsigned and gets rejected on
 			// resend, so strip it here — LLM path only — when the hidden
 			// interrupted-thinking continuity message follows.

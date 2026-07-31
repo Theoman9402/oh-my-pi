@@ -12,11 +12,13 @@ import { coreWeaveProvider } from "./coreweave";
 import { cursorProvider } from "./cursor";
 import { deepseekProvider } from "./deepseek";
 import { devinProvider } from "./devin";
+import { exaProvider } from "./exa";
 import { firepassProvider } from "./firepass";
 import { fireworksProvider } from "./fireworks";
 import { githubCopilotProvider } from "./github-copilot";
 import { gitlabDuoProvider } from "./gitlab-duo";
 import { gitLabDuoWorkflowProvider } from "./gitlab-duo-workflow";
+import { gmiCloudProvider } from "./gmi-cloud";
 import { googleProvider } from "./google";
 import { googleAntigravityProvider } from "./google-antigravity";
 import { googleGeminiCliProvider } from "./google-gemini-cli";
@@ -51,6 +53,8 @@ import { perplexityProvider } from "./perplexity";
 import { qianfanProvider } from "./qianfan";
 import { qwenPortalProvider } from "./qwen-portal";
 import { sakanaProvider } from "./sakana";
+import { siliconflowProvider } from "./siliconflow";
+import { siliconflowCnProvider } from "./siliconflow-cn";
 import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
@@ -91,6 +95,7 @@ const ALL = [
 	googleAntigravityProvider,
 	googleGeminiCliProvider,
 	openaiCodexDeviceProvider,
+	xaiProvider,
 	xaiOauthProvider,
 	gitlabDuoProvider,
 	gitLabDuoWorkflowProvider,
@@ -121,6 +126,8 @@ const ALL = [
 	perplexityProvider,
 	qianfanProvider,
 	veniceProvider,
+	siliconflowProvider,
+	siliconflowCnProvider,
 	syntheticProvider,
 	nanogptProvider,
 	waferServerlessProvider,
@@ -134,6 +141,7 @@ const ALL = [
 	opencodeGoProvider,
 	tavilyProvider,
 	kagiProvider,
+	exaProvider,
 	parallelProvider,
 	ollamaProvider,
 	ollamaCloudProvider,
@@ -143,11 +151,11 @@ const ALL = [
 	openaiProvider,
 	googleProvider,
 	googleVertexProvider,
-	xaiProvider,
 	groqProvider,
 	mistralProvider,
 	minimaxProvider,
 	amazonBedrockProvider,
+	gmiCloudProvider,
 ];
 
 export type RegistryDef = (typeof ALL)[number];

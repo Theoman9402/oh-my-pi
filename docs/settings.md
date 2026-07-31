@@ -385,6 +385,7 @@ thinkingBudgets:
 | `thinkingBudgets.high` | number | `16384` | Token budget for `high`. |
 | `thinkingBudgets.xhigh` | number | `32768` | Token budget for `xhigh`. |
 | `thinkingBudgets.max` | number | `32768` | Token budget for `max`. |
+| `providers.autoThinkingMaxEffort` | enum | `xhigh` | Highest effort `defaultThinkingLevel: auto` may resolve. `xhigh` keeps the classifier one tier below the top, so only `ultrathink` reaches `max`; `max` lets the classifier bill the top tier on models that expose it. The local on-device classifier stays capped at `xhigh` either way. This governs what `auto` *resolves*: a model whose ladder offers nothing under the ceiling gets no auto level at all, and one that also sets `thinking.requiresEffort` still receives its lowest supported effort from the transport — on a `["max"]` ladder that is `max`, because the model accepts nothing else. |
 
 ### Sampling
 
@@ -478,7 +479,7 @@ tools:
 | `tools.artifactTailBytes` | number | `20` | KB of tail kept inline on spill. |
 | `tools.artifactTailLines` | number | `500` | Max tail lines kept inline on spill. |
 
-Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, `web_search.enabled`, and `inspect_image.enabled`.
+Individual built-in tools are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `astEdit.enabled`, `astGrep.enabled`, and `web_search.enabled`. The `inspect_image` tool is controlled by the tri-state `inspect_image.mode` (`auto`|`on`|`off`, default `auto`): `auto` exposes it only when the active model lacks native image input, and the `/vision` slash command overrides the mode per session.
 
 ### Native computer use
 
@@ -744,6 +745,7 @@ Applied whenever raw settings are loaded (global, project, overlays, and runtime
 
 | Old | New |
 |---|---|
+| `inspect_image.enabled` boolean | `inspect_image.mode` (`true` → `on`, `false` → `off`) |
 | `queueMode` | `steeringMode` |
 | `ask.timeout` in milliseconds (value `> 1000`) | seconds (divided by 1000) |
 | flat `theme: "<name>"` string | `theme.dark` / `theme.light` (slot chosen by luminance; built-in `light`/`dark` are dropped to use defaults) |

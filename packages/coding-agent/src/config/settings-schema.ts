@@ -2,6 +2,7 @@ import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
 import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
+import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "../live/voices";
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
 import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../stt/submit-trigger";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
@@ -926,6 +927,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tui.codexResetFireworks": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Codex Reset Fireworks",
+			description:
+				"Celebrate unscheduled Codex weekly usage resets and newly banked saved resets with a top-third fireworks overlay that remains until Escape",
+		},
+	},
+
 	"tui.titleState": {
 		type: "boolean",
 		default: true,
@@ -934,7 +947,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Display",
 			label: "Terminal Title Run State",
 			description:
-				"Show the agent run state in the terminal title's separator — an animated spinner while working, '>' when it's your turn, '!' when the agent is waiting on you",
+				"Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' on Windows), '>' when it's your turn, '!' when the agent is waiting on you",
 		},
 	},
 
@@ -1810,14 +1823,32 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	collapseChangelog: {
-		type: "boolean",
-		default: false,
+	"startup.changelogMode": {
+		type: "enum",
+		values: ["summary", "expanded", "hidden"] as const,
+		default: "summary",
 		ui: {
 			tab: "interaction",
 			group: "Startup & Updates",
-			label: "Collapse Changelog",
-			description: "Show condensed changelog after updates",
+			label: "Startup Changelog",
+			description: "Choose whether update notes start as a summary, full details, or stay hidden",
+			options: [
+				{
+					value: "summary",
+					label: "Summary",
+					description: "Show release and change counts with a /changelog hint",
+				},
+				{
+					value: "expanded",
+					label: "Expanded",
+					description: "Show the recent release notes in full",
+				},
+				{
+					value: "hidden",
+					label: "Hidden",
+					description: "Do not show release notes on startup",
+				},
+			],
 		},
 	},
 
@@ -3834,14 +3865,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// Legacy boolean kept only for back-compat migration to `inspect_image.mode`
+	// (see config/settings.ts). Hidden from UI.
 	"inspect_image.enabled": {
 		type: "boolean",
 		default: false,
+	},
+
+	"inspect_image.mode": {
+		type: "enum",
+		values: ["auto", "on", "off"] as const,
+		default: "auto",
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
 			label: "Inspect Image",
-			description: "Enable the inspect_image tool, delegating image understanding to a vision-capable model",
+			description:
+				"Controls the inspect_image tool, which delegates image understanding to a vision-capable model. 'auto' exposes it only when the active model lacks native image input; 'on' always exposes it; 'off' never does.",
+			options: [
+				{ value: "auto", label: "Auto (only for models without vision)" },
+				{ value: "on", label: "On" },
+				{ value: "off", label: "Off" },
+			],
 		},
 	},
 
@@ -3902,6 +3947,25 @@ export const SETTINGS_SCHEMA = {
 			group: "Computer",
 			label: "Computer Screenshot Height",
 			description: "Maximum composite screenshot height in pixels",
+		},
+	},
+
+	"inspect_image.timeoutMs": {
+		type: "number",
+		default: 300_000,
+		ui: {
+			tab: "tools",
+			group: "Execution",
+			label: "Inspect Image Timeout",
+			description:
+				"Per-request timeout for the inspect_image vision-model call, in milliseconds. A stalled provider fails fast with a timeout error instead of blocking until manual abort. Set to 0 to disable the timeout.",
+			options: [
+				{ value: "0", label: "Disabled" },
+				{ value: "60000", label: "1 minute" },
+				{ value: "120000", label: "2 minutes" },
+				{ value: "180000", label: "3 minutes" },
+				{ value: "300000", label: "5 minutes" },
+			],
 		},
 	},
 
@@ -3998,6 +4062,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"security.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Security",
+			description:
+				"Enable OMP-native security scan planning, execution, and the read-only security:// resource namespace",
+		},
+	},
+
 	"ask.enabled": {
 		type: "boolean",
 		default: true,
@@ -4017,6 +4093,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Available Tools",
 			label: "Browser",
 			description: "Enable the browser tool for scripted Chromium automation (puppeteer)",
+		},
+	},
+
+	"browser.cdpUrl": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "tools",
+			group: "Grep & Browser",
+			label: "Browser CDP URL",
+			description:
+				"Default HTTP CDP discovery endpoint (for example http://127.0.0.1:9222) to attach to instead of launching a browser. Explicit app.cdp_url or app.path on the tool call take precedence.",
 		},
 	},
 
@@ -4456,6 +4544,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.enableEffort": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Per-Task Effort",
+			description:
+				"Expose the optional effort parameter on task spawns, allowing callers to override each subagent's thinking level",
+		},
+	},
+
 	"task.maxConcurrency": {
 		type: "number",
 		default: 32,
@@ -4546,7 +4646,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
-				"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents use a lower built-in budget.",
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them.",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "90", label: "90 requests" },
@@ -4565,6 +4665,20 @@ export const SETTINGS_SCHEMA = {
 			label: "Soft Request Budget Notice",
 			description:
 				"Inject one steering notice when a subagent crosses its soft request budget, asking it to wrap up before the 1.5x forced-yield stop.",
+		},
+	},
+
+	"task.maxEffort": {
+		type: "enum",
+		values: THINKING_EFFORTS,
+		default: "max",
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Maximum Per-Spawn Effort",
+			description:
+				"Maximum reasoning effort allowed for the task tool's per-spawn effort hint. Lower values prevent callers from escalating subagents above this ceiling; the default preserves the model's full range.",
+			options: THINKING_EFFORTS.map(getThinkingLevelMetadata),
 		},
 	},
 
@@ -4826,6 +4940,18 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	"live.voice": {
+		type: "enum",
+		values: LIVE_VOICE_VALUES,
+		default: DEFAULT_LIVE_VOICE,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Live Voice",
+			description: "Voice used by Codex-backed realtime voice sessions",
+			options: LIVE_VOICE_OPTIONS,
+		},
+	},
 	"providers.tts": {
 		type: "enum",
 		values: ["auto", "local", "xai"] as const,
@@ -4990,6 +5116,23 @@ export const SETTINGS_SCHEMA = {
 				"Difficulty classifier for the `auto` thinking level: online (the TINY role from /models, else smol) by default, or a local on-device model",
 			condition: "autoThinkingActive",
 			options: AUTO_THINKING_MODEL_OPTIONS,
+		},
+	},
+	"providers.autoThinkingMaxEffort": {
+		type: "enum",
+		values: ["xhigh", "max"] as const,
+		default: "xhigh",
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Auto Thinking Ceiling",
+			description:
+				"Highest effort the `auto` classifier may resolve. `xhigh` keeps the classifier one tier below the top, so only an explicit `ultrathink` reaches `max`; `max` lets a turn the classifier judges exceptional bill the top tier on models that expose it.",
+			condition: "autoThinkingActive",
+			options: [
+				{ value: "xhigh", label: "xhigh", description: "Classifier stops at xhigh (default)" },
+				{ value: "max", label: "max", description: "Classifier may resolve max where the model supports it" },
+			],
 		},
 	},
 	"features.unexpectedStopDetection": {

@@ -69,6 +69,7 @@ import {
 	sanitizeOpenAIResponsesAssistantFallbackItemsForReplay,
 	sanitizeOpenAIResponsesAssistantHistoryItemsForReplay,
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
+	stripUnpairedOpenAIResponsesComputerReasoningIdsForReplay,
 } from "../utils";
 import {
 	clearStreamingPartialJson,
@@ -77,6 +78,7 @@ import {
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
+import { escapeHarmonyControlTokens, isHarmonyDialectModel } from "../utils/harmony-leak";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
@@ -1362,28 +1364,22 @@ export function collectComputerCallIds(messages: ResponseInput): Set<string> {
  * codex provider — issue #1351 / regression of #472.
  */
 export function repairOrphanResponsesToolOutputs(input: ResponseInput): ResponseInput {
-	const callKinds = new Map<string, ResponsesToolCallKind>();
-	for (const item of input) {
-		const kind = responsesToolCallKind(item.type);
+	const precedingCalls = new Set<string>();
+	let repaired: ResponseInput | undefined;
+	for (let index = 0; index < input.length; index++) {
+		const item = input[index];
+		const callKind = responsesToolCallKind(item.type);
 		const callId = responseInputCallId(item);
-		if (kind && callId) callKinds.set(callId, kind);
-	}
-	let hasOrphan = false;
-	for (const item of input) {
-		const kind = responsesToolOutputKind(item.type);
-		const callId = responseInputCallId(item);
-		if (kind && callId && callKinds.get(callId) !== kind) {
-			hasOrphan = true;
-			break;
+		if (callKind && callId) precedingCalls.add(`${callKind}\0${callId}`);
+
+		const outputKind = responsesToolOutputKind(item.type);
+		if (!outputKind || !callId || precedingCalls.has(`${outputKind}\0${callId}`)) {
+			repaired?.push(item);
+			continue;
 		}
-	}
-	if (!hasOrphan) return input;
-	return input.map(item => {
-		const kind = responsesToolOutputKind(item.type);
-		if (!kind) return item;
-		const callId = responseInputCallId(item);
-		if (!callId || callKinds.get(callId) === kind) return item;
-		const toolName = kind === "computer" ? "computer" : "tool";
+
+		if (!repaired) repaired = input.slice(0, index);
+		const toolName = outputKind === "computer" ? "computer" : "tool";
 		const rawOutput = "output" in item ? item.output : undefined;
 		let text: string;
 		if (typeof rawOutput === "string") text = rawOutput;
@@ -1397,12 +1393,13 @@ export function repairOrphanResponsesToolOutputs(input: ResponseInput): Response
 		}
 		const ORPHAN_OUTPUT_LIMIT = 16_000;
 		if (text.length > ORPHAN_OUTPUT_LIMIT) text = `${text.slice(0, ORPHAN_OUTPUT_LIMIT)}\n...[truncated]`;
-		return {
+		repaired.push({
 			type: "message",
 			role: "assistant",
 			content: `[Orphan ${toolName} result; call_id=${callId}]: ${text}`,
-		} as ResponseInput[number];
-	});
+		} as ResponseInput[number]);
+	}
+	return repaired ?? input;
 }
 
 /** Placeholder output for a tool call whose result is absent from the input. */
@@ -1424,27 +1421,29 @@ const ORPHAN_TOOL_CALL_PLACEHOLDER =
  * {@link repairOrphanResponsesToolOutputs}.
  */
 export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseInput {
-	const outputKinds = new Map<string, ResponsesToolCallKind>();
-	for (const item of input) {
-		const kind = responsesToolOutputKind(item.type);
+	const laterOutputs = new Set<string>();
+	const orphanIndexes = new Set<number>();
+	for (let index = input.length - 1; index >= 0; index--) {
+		const item = input[index];
 		const callId = responseInputCallId(item);
-		if (kind && callId) outputKinds.set(callId, kind);
+		const outputKind = responsesToolOutputKind(item.type);
+		if (outputKind && callId) laterOutputs.add(`${outputKind}\0${callId}`);
+
+		const callKind = responsesToolCallKind(item.type);
+		if (callKind && callId && !laterOutputs.has(`${callKind}\0${callId}`)) orphanIndexes.add(index);
 	}
-	let hasOrphan = false;
-	for (const item of input) {
-		const kind = responsesToolCallKind(item.type);
-		const callId = responseInputCallId(item);
-		if (kind && callId && outputKinds.get(callId) !== kind) {
-			hasOrphan = true;
-			break;
-		}
-	}
-	if (!hasOrphan) return input;
+	if (orphanIndexes.size === 0) return input;
+
 	const repaired: ResponseInput = [];
-	for (const item of input) {
+	for (let index = 0; index < input.length; index++) {
+		const item = input[index];
+		if (!orphanIndexes.has(index)) {
+			repaired.push(item);
+			continue;
+		}
 		const kind = responsesToolCallKind(item.type);
 		const callId = responseInputCallId(item);
-		if (!kind || !callId || outputKinds.get(callId) === kind) {
+		if (!kind || !callId) {
 			repaired.push(item);
 			continue;
 		}
@@ -1484,16 +1483,24 @@ export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
 	supportsImages: boolean,
 	supportsImageDetailOriginal: boolean,
+	escapeControlTokens = false,
 ): ResponseInputContent[] | undefined {
 	if (typeof content === "string") {
 		if (content.trim().length === 0) return undefined;
-		return [{ type: "input_text", text: content.toWellFormed() } satisfies ResponseInputText];
+		const text = content.toWellFormed();
+		return [
+			{
+				type: "input_text",
+				text: escapeControlTokens ? escapeHarmonyControlTokens(text) : text,
+			} satisfies ResponseInputText,
+		];
 	}
 
 	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
 	const normalizedContent: ResponseInputContent[] = [];
 	for (const item of textBlocks) {
-		const text = item.text.toWellFormed();
+		const raw = item.text.toWellFormed();
+		const text = escapeControlTokens ? escapeHarmonyControlTokens(raw) : raw;
 		if (text.trim().length === 0) continue;
 		normalizedContent.push({
 			type: "input_text",
@@ -1603,6 +1610,45 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	preserveAssistantMessageIds?: boolean;
 }
 
+/**
+ * Escape reserved Harmony control tokens in the client-boundary text of
+ * replayed Responses input items — user/developer/system message text and
+ * tool-result output. Model-owned items (assistant output, reasoning, tool-call
+ * arguments) carry no client data and are returned untouched.
+ *
+ * Native history replay pushes stored `providerPayload` items straight onto the
+ * wire, bypassing {@link convertResponsesInputContent}; without this a stored
+ * `input_text` carrying `<|channel|>analysis` still reaches gpt-5.x raw (#6913).
+ * Callers gate on {@link isHarmonyDialectModel}. Items are copied, not mutated.
+ */
+export function escapeReplayedClientText(items: ResponseInput): ResponseInput {
+	return items.map(item => {
+		if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
+			return typeof item.output === "string" ? { ...item, output: escapeHarmonyControlTokens(item.output) } : item;
+		}
+		// EasyInputMessage may omit `type` (`{ role, content }`); the responses
+		// server persists it verbatim, so treat missing type as a message too.
+		const isTypedMessage = item.type === "message" || item.type === undefined;
+		if (isTypedMessage && "role" in item && "content" in item) {
+			const role = item.role;
+			if (role !== "user" && role !== "developer" && role !== "system") return item;
+			const content = item.content;
+			if (typeof content === "string") {
+				return { ...item, content: escapeHarmonyControlTokens(content) };
+			}
+			if (Array.isArray(content)) {
+				return {
+					...item,
+					content: content.map(part =>
+						part.type === "input_text" ? { ...part, text: escapeHarmonyControlTokens(part.text) } : part,
+					),
+				};
+			}
+		}
+		return item;
+	});
+}
+
 export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInputOptions<TApi>): ResponseInput {
 	const messages: ResponseInput = [];
 	const systemPrompts = options.systemRole ? normalizeSystemPrompts(options.context.systemPrompt) : [];
@@ -1630,6 +1676,11 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 	const filterReasoning = <T extends { type?: string }>(items: T[]): T[] =>
 		options.nativeHistory?.filterReasoning ? items.filter(item => item?.type !== "reasoning") : items;
 	const includeThinkingSignatures = options.includeThinkingSignatures ?? options.nativeHistory?.replay ?? true;
+	// Harmony-server models (gpt-5.x) reject requests whose input data reproduces
+	// reserved control-token spellings; escape the transport copy of untrusted
+	// user/tool text so ordinary docs, code, or grep results cannot poison the
+	// session (#6913). The persisted transcript is never touched.
+	const escapeControlTokens = isHarmonyDialectModel(options.model);
 
 	let msgIndex = 0;
 	for (const msg of transformedMessages) {
@@ -1649,15 +1700,15 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			if (historyItems && shouldReplayPayloadItems) {
 				const sanitizedItems = sanitizeOpenAIResponsesHistoryItemsForReplay(filterReasoning(historyItems), {
 					supportsImageDetailOriginal,
+					supportsComputerUse: options.model.supportsComputerUse === true,
 				});
-				messages.push(
-					...adaptResponsesReplayItemsForModel(
-						sanitizedItems,
-						supportsCustomToolCalls,
-						customToolWireNameMap,
-						options.model.supportsComputerUse === true,
-					),
+				const replayItems = adaptResponsesReplayItemsForModel(
+					sanitizedItems,
+					supportsCustomToolCalls,
+					customToolWireNameMap,
+					options.model.supportsComputerUse === true,
 				);
+				messages.push(...(escapeControlTokens ? escapeReplayedClientText(replayItems) : replayItems));
 				knownCallIds = collectKnownCallIds(messages);
 				for (const id of collectCustomCallIds(messages)) customCallIds.add(id);
 				for (const id of collectComputerCallIds(messages)) computerCallIds.add(id);
@@ -1668,13 +1719,20 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				msg.content,
 				options.model.input.includes("image"),
 				supportsImageDetailOriginal,
+				escapeControlTokens,
 			);
 			if (!content) continue;
+			const developerText =
+				options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
+					? msg.content.toWellFormed()
+					: undefined;
 			messages.push({
 				role: "user",
 				content:
-					options.developerStringContent && msg.role === "developer" && typeof msg.content === "string"
-						? msg.content.toWellFormed()
+					developerText !== undefined
+						? escapeControlTokens
+							? escapeHarmonyControlTokens(developerText)
+							: developerText
 						: content,
 			});
 		} else if (msg.role === "assistant") {
@@ -1697,7 +1755,10 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 			if (historyItems) {
 				const rawSanitizedHistoryItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
 					filterReasoning(historyItems),
-					{ supportsImageDetailOriginal },
+					{
+						supportsImageDetailOriginal,
+						supportsComputerUse: options.model.supportsComputerUse === true,
+					},
 				);
 				const sanitizedHistoryItems = rawSanitizedHistoryItems
 					? adaptResponsesReplayItemsForModel(
@@ -1758,7 +1819,8 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 	}
 
 	const withRepairedOutputs = options.repairOrphanOutputs ? repairOrphanResponsesToolOutputs(messages) : messages;
-	return repairOrphanResponsesToolCalls(withRepairedOutputs);
+	const withRepairedCalls = repairOrphanResponsesToolCalls(withRepairedOutputs);
+	return stripUnpairedOpenAIResponsesComputerReasoningIdsForReplay(withRepairedCalls);
 }
 
 type ResponsesReplayAssistantMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -1948,7 +2010,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	// genuinely empty text result (empty file read, silent tool) must stay
 	// empty — the placeholder sent models chasing an attachment that never
 	// existed.
-	const output = (
+	const rawOutput = (
 		omittedImages
 			? joinTextWithImagePlaceholder(textResult, true)
 			: textResult.length > 0
@@ -1957,6 +2019,10 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 					? "(see attached image)"
 					: ""
 	).toWellFormed();
+	// Harmony-server models reject reserved control-token spellings even as tool
+	// data; escape the transport copy so a grep/read result cannot poison the
+	// session (#6913). Covers every downstream branch that consumes `output`.
+	const output = isHarmonyDialectModel(model) ? escapeHarmonyControlTokens(rawOutput) : rawOutput;
 	if (toolResult.providerMetadata?.type === "computer" && model.supportsComputerUse !== true) {
 		messages.push({
 			type: "message",
